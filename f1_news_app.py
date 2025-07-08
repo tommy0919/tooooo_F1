@@ -70,4 +70,4 @@ if user_input:
     # 空欄にして再表示（rerunは不要）
     st.experimental_set_query_params()
 
-    st.experimental_rerun()
+    st.rerun()
