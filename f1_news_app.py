@@ -97,7 +97,7 @@ F1の専門家として、以下の情報を参照しながら、ユーザーの
         reply = f"回答失敗: {e}"
 
     st.session_state.chat_history.append({"role": "assistant", "content": reply})
-    st.experimental_rerun()  # refresh to clear input and show chat
+    st.rerun()  # refresh to clear input and show chat
 
 # display chat history (LINE風)
 for msg in reversed(st.session_state.chat_history):
