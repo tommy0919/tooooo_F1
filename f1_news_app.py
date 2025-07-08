@@ -1,107 +1,73 @@
-import os, requests, feedparser, fitz, streamlit as st, openai
+import streamlit as st
+import openai
+import os
+import glob
+from PyPDF2 import PdfReader
 
-# ━━━ OpenAI setup ━━━
-client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# タイトルと説明
+st.set_page_config(page_title="F1チャットAI 2025", layout="wide")
+st.title("🏎️ F1チャットAI 2025")
+st.markdown("最新PDFやレース結果、ニュースを参照して回答します")
 
-# ━━━ Session state init ━━━
+# OpenAI APIキーの読み込み
+openai.api_key = os.getenv("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"]
+
+# セッションで会話履歴を管理
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# ━━━ PDF Reader ━━━
-def read_all_pdfs(folder="data"):
+# 📄 PDFからテキストを抽出
+def load_pdf_texts(folder_path="./pdfs"):
     texts = []
-    if not os.path.exists(folder):
-        return "(PDFデータがありません)"
-    for f in os.listdir(folder):
-        if f.endswith(".pdf"):
-            try:
-                with fitz.open(os.path.join(folder, f)) as doc:
-                    body = "\n".join(p.get_text() for p in doc)
-                    texts.append(f"[{f}]\n{body}")
-            except Exception as e:
-                texts.append(f"[{f}] 読み込み失敗: {e}")
-    return "\n\n".join(texts) or "(PDF情報なし)"
+    pdf_files = glob.glob(os.path.join(folder_path, "*.pdf"))
+    for pdf_file in pdf_files:
+        with open(pdf_file, "rb") as f:
+            reader = PdfReader(f)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() or ""
+            texts.append(text)
+    return "\n\n".join(texts)
 
-# ━━━ External APIs ━━━
-def driver_list_ergast():
-    try:
-        res = requests.get("http://ergast.com/api/f1/2025/drivers.json", timeout=5)
-        drivers = res.json()["MRData"]["DriverTable"]["Drivers"]
-        if not drivers:
-            return "Ergastにはドライバーがなし"
-        return "\n".join(f"・{d['givenName']} {d['familyName']}" for d in drivers)
-    except Exception as e:
-        return f"エラー: {e}"
+# 📥 ユーザー入力
+user_input = st.text_input("質問を入力", placeholder="例：2025年のF1ドライバーラインナップを教えて")
 
-def last_race_result():
-    try:
-        res = requests.get("http://ergast.com/api/f1/current/last/results.json", timeout=5)
-        race = res.json()["MRData"]["RaceTable"]["Races"][0]
-        rows = "\n".join(
-            f"{r['position']}. {r['Driver']['familyName']} ({r['Constructor']['name']})"
-            for r in race["Results"][:10]
-        )
-        return f"{race['raceName']} \u7d50\u679c\n{rows}"
-    except Exception as e:
-        return f"エラー: {e}"
+# 💬 会話ログの表示
+for msg in st.session_state.chat_history:
+    st.markdown(f"**🧑‍💬 ユーザー：** {msg['user']}")
+    st.markdown(f"**🤖 回答：** {msg['bot']}")
 
-def latest_news(max_items=3):
-    try:
-        feed = feedparser.parse("https://www.motorsport.com/rss/f1/news/")
-        return "\n".join(f"・{e.title}" for e in feed.entries[:max_items])
-    except Exception as e:
-        return f"エラー: {e}"
-
-# ━━━ UI ━━━
-st.title("🏎️ F1チャットAI 2025")
-st.caption("最新PDFやレース結果、ニュースを参照して回答します")
-
-# user input
-user_input = st.text_input("質問を入力", key="input")
+# 🔍 回答生成
 if user_input:
-    # show immediately in chat
-    st.session_state.chat_history.append({"role": "user", "content": user_input})
-
-    # gather knowledge
-    pdf_text = read_all_pdfs()
-    drivers = driver_list_ergast()
-    race_text = last_race_result()
-    news_text = latest_news()
-
-    prompt = f"""
-F1の専門家として、以下の情報を参照しながら、ユーザーの質問に日本語で簡潔に回答してください。
-
-[PDF]
-{pdf_text}
-
-[2025ドライバー]
-{drivers}
-
-[最新レース]
-{race_text}
-
-[最新ニュース]
-{news_text}
-
-質問: {user_input}
-"""
+    context = load_pdf_texts()
+    system_prompt = f"""
+    あなたはF1の専門家AIです。
+    以下のコンテキストに基づいて、ユーザーからの質問に日本語で丁寧に答えてください。
+    コンテキストは最新のニュース記事やレース情報などです。
+    コンテキスト:
+    {context}
+    """
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.5
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ]
         )
-        reply = response.choices[0].message.content.strip()
+        answer = response.choices[0].message["content"]
+
     except Exception as e:
-        reply = f"回答失敗: {e}"
+        answer = f"⚠️ エラーが発生しました: {e}"
 
-    st.session_state.chat_history.append({"role": "assistant", "content": reply})
-    st.rerun()  # refresh to clear input and show chat
+    # 履歴に追加
+    st.session_state.chat_history.append({
+        "user": user_input,
+        "bot": answer
+    })
 
-# display chat history (LINE風)
-for msg in reversed(st.session_state.chat_history):
-    if msg["role"] == "user":
-        st.markdown(f"<div style='text-align:right; color:white; background-color:#0f62fe; padding:8px 12px; border-radius:12px; margin:4px 0;'>{msg['content']}</div>", unsafe_allow_html=True)
-    else:
-        st.markdown(f"<div style='text-align:left; color:black; background-color:#f4f4f4; padding:8px 12px; border-radius:12px; margin:4px 0;'>{msg['content']}</div>", unsafe_allow_html=True)
+    # 空欄にして再表示（rerunは不要）
+    st.experimental_set_query_params()
+
+    st.experimental_rerun()
