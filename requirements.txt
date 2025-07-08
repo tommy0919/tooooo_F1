@@ -3,3 +3,4 @@ openai
 PyMuPDF
 feedparser
 requests
+PyPDF2
